@@ -1,0 +1,43 @@
+# Identidy domain names (.101 being the dc)
+ldapsearch -x -H ldap://172.16.160.101 -s base -b "" \
+  defaultNamingContext rootDomainNamingContext dnsHostName ldapServiceName
+# or
+
+for ip in 172.16.160.100 172.16.160.101 172.16.160.102; do echo -n "$ip -> "; ldapsearch -x -H ldap://$ip -s base -b "" defaultNamingContext 2>/dev/null | sed -n 's/^defaultNamingContext: //p'; done
+
+Next: Identify fqdns, servers, ip adresses and add to /etc/hosts
+# 1. SMB sweep → all 445-open hosts incl ops/prod (name+domain+IP)
+nxc smb 172.16.160.0/24 --generate-hosts-file /tmp/hosts_smb.txt
+# 2. reverse DNS, ONE resolver → catches no-SMB/Linux hosts like admin01 (.115)
+nmap -sL -R --dns-servers 172.16.160.101 172.16.160.0/24 | awk '/report for/ && /\(/{ip=$NF; gsub(/[()]/,"",ip); print ip"\t"$5"\t"substr($5,1,index($5,".")-1)}' > /tmp/hosts_dns.txt
+# 3. merge, dedupe by IP
+cat /tmp/hosts_smb.txt /tmp/hosts_dns.txt | awk '!seen[$1]++' | sort -V | tee -a /etc/hosts
+
+
+# Now, create the /etc/krb5.conf file:
+
+IFS=$' \t\n'          # restore normal word-splitting
+DEFAULT_REALM="DENKIAIR.COM"
+TMP=/tmp/krb5.conf.new
+
+{
+  printf '[libdefaults]\n    default_realm = %s\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n    rdns = false\n    forwardable = true\n\n[realms]\n' "$DEFAULT_REALM"
+  for ip in 172.16.160.100 172.16.160.101 172.16.160.102; do
+    out=$(ldapsearch -x -H "ldap://$ip" -s base -b "" defaultNamingContext dnsHostName 2>/dev/null)
+    dom=$(printf '%s\n' "$out" | awk -F': ' '/^defaultNamingContext:/{gsub(/DC=/,"",$2); gsub(/,/,".",$2); print $2}')
+    dc=$(printf  '%s\n' "$out" | awk -F': ' '/^dnsHostName:/{print $2}')
+    [ -z "$dom" ] || [ -z "$dc" ] && { echo ">> WARN: no data from $ip" >&2; continue; }
+    realm=$(printf '%s' "$dom" | tr a-z A-Z)
+    printf '    %s = {\n        kdc = %s\n        admin_server = %s\n    }\n' "$realm" "$dc" "$dc"
+  done
+  printf '\n[domain_realm]\n'
+  for ip in 172.16.160.100 172.16.160.101 172.16.160.102; do
+    dom=$(ldapsearch -x -H "ldap://$ip" -s base -b "" defaultNamingContext 2>/dev/null | awk -F': ' '/^defaultNamingContext:/{gsub(/DC=/,"",$2); gsub(/,/,".",$2); print $2}')
+    [ -z "$dom" ] && continue
+    realm=$(printf '%s' "$dom" | tr a-z A-Z)
+    printf '    .%s = %s\n    %s = %s\n' "$dom" "$realm" "$dom" "$realm"
+  done
+} > "$TMP"
+
+cat "$TMP"
+grep -qE '^ +kdc = \S' "$TMP" && cp "$TMP" /etc/krb5.conf && echo ">> /etc/krb5.conf updated" || echo ">> ABORT: no realms, left untouched"
