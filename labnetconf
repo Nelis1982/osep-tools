@@ -7,9 +7,9 @@ for ip in 172.16.160.100 172.16.160.101 172.16.160.102; do echo -n "$ip -> "; ld
 
 Next: Identify fqdns, servers, ip adresses and add to /etc/hosts
 # 1. SMB sweep → all 445-open hosts incl ops/prod (name+domain+IP)
-nxc smb 172.16.160.0/24 --generate-hosts-file /tmp/hosts_smb.txt
+nxc smb xxx.xxx.xxx.x/24 --generate-hosts-file /tmp/hosts_smb.txt
 # 2. reverse DNS, ONE resolver → catches no-SMB/Linux hosts like admin01 (.115)
-nmap -sL -R --dns-servers 172.16.160.101 172.16.160.0/24 | awk '/report for/ && /\(/{ip=$NF; gsub(/[()]/,"",ip); print ip"\t"$5"\t"substr($5,1,index($5,".")-1)}' > /tmp/hosts_dns.txt
+nmap -sL -R --dns-servers <DC1-IP> <DC2-IP> xxx.xxx.xxx.0/24 | awk '/report for/ && /\(/{ip=$NF; gsub(/[()]/,"",ip); print ip"\t"$5"\t"substr($5,1,index($5,".")-1)}' > /tmp/hosts_dns.txt
 # 3. merge, dedupe by IP
 cat /tmp/hosts_smb.txt /tmp/hosts_dns.txt | awk '!seen[$1]++' | sort -V | tee -a /etc/hosts
 
@@ -17,7 +17,7 @@ cat /tmp/hosts_smb.txt /tmp/hosts_dns.txt | awk '!seen[$1]++' | sort -V | tee -a
 # Now, create the /etc/krb5.conf file:
 
 IFS=$' \t\n'          # restore normal word-splitting
-DEFAULT_REALM="DENKIAIR.COM"
+DEFAULT_REALM="xxxxxxx.COM"
 TMP=/tmp/krb5.conf.new
 
 {
